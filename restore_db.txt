@@ -1,0 +1,68 @@
+# Reescrevendo DB; Restaurando Banco de Dados; Inserindo Backup em BD de Teste;
+
+
+### Passo #1 -> Entrar no usuário postgre:
+```bash
+sudo su - postgres
+```
+
+### Passo #1.1 -> Caso exista, deletar o banco de dados atual:
+dropdb nome_do_banco_de_dados
+
+### Passo #1.2 -> Se for necessário, devemos passar o arquivo .sql , nosso arquivo backup, para a pasta /tmp/ , assim, poderemos acessar ela em nosso usuário postgres:
+cp nome_do_backup.sql /tmp/
+
+### Passo #2 -> Criamos novamente o DB:
+createdb nome_do_banco_de_dados
+
+### Passo #2.1 -> Caso seja necessário, a depender do backup, devemos deletar a public:
+#### Passo #2.1.1 -> Acessando o DB:
+psql -U postgres -d database_dso_teste
+#### Passo #2.1.2 -> Deletando o SCHEMA Public
+DROP SCHEMA public CASCADE;
+\q
+
+### Passo #3 -> Restauramos o banco de dados
+pg_restore -U postgres -d nome_do_banco_de_dados /tmp/nome_do_backup.sql
+
+### Passo #4 -> Com isso, já temos nosso banco restaurado , porém, ainda podem conter algumas implicações a depender do backup, como o owner de cada tabela , para isso alteraremos tudo com algumas linhas de código SQL:
+
+#### Passo #4.1 -> Entramos novamente no DB:
+psql -U postgres -d database_dso_teste
+
+#### Passo #4.2 -> Vamos a troca de proprietário:
+
+DO $$ 
+DECLARE
+    r RECORD;
+BEGIN
+    -- Alterar proprietário de todas as tabelas
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+        EXECUTE 'ALTER TABLE public.' || quote_ident(r.tablename) || ' OWNER TO postgres;';
+    END LOOP;
+
+    -- Alterar proprietário de todas as sequências
+    FOR r IN (SELECT sequencename FROM pg_sequences WHERE schemaname = 'public') LOOP
+        EXECUTE 'ALTER SEQUENCE public.' || quote_ident(r.sequencename) || ' OWNER TO postgres;';
+    END LOOP;
+
+    -- Alterar proprietário de todas as funções
+    FOR r IN (SELECT routine_name, routine_type FROM information_schema.routines WHERE routine_schema = 'public') LOOP
+        IF r.routine_type = 'FUNCTION' THEN
+            EXECUTE 'ALTER FUNCTION public.' || quote_ident(r.routine_name) || '() OWNER TO postgres;';
+        END IF;
+    END LOOP;
+END $$;
+
+-- Alterar proprietário do Schema public
+ALTER SCHEMA public OWNER TO postgres;
+
+\q
+
+### Passo #5 -> Para usuários do Django
+#### Passo #5.1 -> Devemos removar as migrations para não dá incompatibilidade
+find . -path "*/migrations/*.py" -not -name "__init__.py" -delete
+find . -path "*/migrations/*.pyc"  -delete
+
+#### Passo #5.2 -> Devemos criar novas migrations e da um migrate --fake
+python manage.py makemigrations && python manage.py migrate --fake
